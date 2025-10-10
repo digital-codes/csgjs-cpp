@@ -292,11 +292,11 @@ int main(int /*argc*/, char ** /*arvc*/) {
         {
             exunit::Timer t;
 
-            auto a = csgpolygon_cube({0.0f, 0.0f, 0.0f}, {10.0f, 10.0f, 10.0f}, white);
-            auto b = csgpolygon_sphere({0, 0, 0}, 1.35f, white, 160);
-            auto c = csgpolygon_cylinder({-1, 0, 0}, {1, 0, 0}, 0.7f, red,20);
-            auto d = csgpolygon_cylinder({0, -1, 0}, {0, 1, 0}, 0.7f, green,20);
-            auto e = csgpolygon_cylinder({0, 0, -1}, {0, 0, 1}, 0.7f, blue,20);
+            auto a = csgpolygon_cube({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, white);
+            auto b = csgpolygon_sphere({0, 0, 0}, 1.35f, white, 16);
+            auto c = csgpolygon_cylinder({-1, 0, 0}, {1, 0, 0}, 0.7f, red);
+            auto d = csgpolygon_cylinder({0, -1, 0}, {0, 1, 0}, 0.7f, green);
+            auto e = csgpolygon_cylinder({0, 0, -1}, {0, 0, 1}, 0.7f, blue);
 
             // a.intersect(b).subtract(c.union(d).union(e))
             auto polygons = csgsubtract(csgintersection(a, b), csgunion(csgunion(c, d), e));
