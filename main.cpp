@@ -117,8 +117,11 @@ namespace exunit {
 			elapsed.QuadPart *= 1000000;
 
 			return elapsed.QuadPart / sFrequency.QuadPart;
-#else
-			return 0;
+#endif
+#if defined(__linux__)
+			struct timespec currentTime;
+			clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &currentTime);
+			return (currentTime.tv_nsec - mStartTime.tv_nsec)/1.0e6;
 #endif
 		}
 
@@ -126,16 +129,25 @@ namespace exunit {
 #if defined(WIN32)
 			QueryPerformanceFrequency(&sFrequency);
 #endif
+#if defined(__linux__)
+			clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &mStartTime);
+#endif
 		}
 
 #if defined(WIN32)
 		static LARGE_INTEGER sFrequency;
 		LARGE_INTEGER        mStartingTime;
 #endif
+#if defined(__linux__)
+		static struct timespec mStartTime;
+#endif
 	};
 
 #if defined(WIN32)
 	LARGE_INTEGER Timer::sFrequency;
+#endif
+#if defined(__linux__)
+	struct timespec Timer::mStartTime;
 #endif
 
 } // namespace exunit
