@@ -393,9 +393,9 @@ void Plane::splitpolygon(const Polygon &poly, CSGJSCPP_VECTOR<Polygon> &coplanar
             }
         }
         if (f.size() >= 3)
-            front.push_back(Polygon(f));
+            front.push_back(Polygon(std::move(f)));
         if (b.size() >= 3)
-            back.push_back(Polygon(b));
+            back.push_back(Polygon(std::move(b)));
         break;
     }
     }
@@ -497,6 +497,7 @@ CSGJSCPP_VECTOR<Polygon> CSGNode::clippolygons(const CSGJSCPP_VECTOR<Polygon> &i
         const CSGJSCPP_VECTOR<Polygon> &list = clips.front().second;
 
         if (!me->plane.ok()) {
+            result.reserve(result.size() + list.size());
             result.insert(result.end(), list.begin(), list.end());
             clips.pop_front();
             continue;
@@ -507,14 +508,16 @@ CSGJSCPP_VECTOR<Polygon> CSGNode::clippolygons(const CSGJSCPP_VECTOR<Polygon> &i
             me->plane.splitpolygon(list[i], list_front, list_back, list_front, list_back);
 
         if (me->front)
-            clips.push_back(CSGJSCPP_MAKEPAIR(me->front, list_front));
-        else
+            clips.push_back(CSGJSCPP_MAKEPAIR(me->front, std::move(list_front)));
+        else {
+            result.reserve(result.size() + list_front.size());
             result.insert(result.end(), list_front.begin(), list_front.end());
+        }
 
         if (me->back)
-            clips.push_back(CSGJSCPP_MAKEPAIR(me->back, list_back));
+            clips.push_back(CSGJSCPP_MAKEPAIR(me->back, std::move(list_back)));
 
-        clips.pop_front();
+        clips.pop_front();      //do it now because above the list is a reference and not a copy!
     }
 
     return result;
@@ -610,15 +613,14 @@ void CSGNode::build(const CSGJSCPP_VECTOR<Polygon> &ilist) {
         if (list_front.size()) {
             if (!me->front)
                 me->front = new CSGNode;
-            builds.push_back(CSGJSCPP_MAKEPAIR(me->front, list_front));
+            builds.push_back(CSGJSCPP_MAKEPAIR(me->front, std::move(list_front)));
         }
         if (list_back.size()) {
             if (!me->back)
                 me->back = new CSGNode;
-            builds.push_back(CSGJSCPP_MAKEPAIR(me->back, list_back));
+            builds.push_back(CSGJSCPP_MAKEPAIR(me->back, std::move(list_back)));
         }
-
-        builds.pop_front();
+        builds.pop_front();         //do it now because above the list is a reference and not a copy!
     }
 }
 
