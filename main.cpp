@@ -117,8 +117,11 @@ namespace exunit {
 			elapsed.QuadPart *= 1000000;
 
 			return elapsed.QuadPart / sFrequency.QuadPart;
-#else
-			return 0;
+#endif
+#if defined(__linux__)
+			struct timespec currentTime;
+			clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &currentTime);
+			return (currentTime.tv_sec - mStartTime.tv_sec) * 1000 + (currentTime.tv_nsec - mStartTime.tv_nsec) / 1000000;
 #endif
 		}
 
@@ -126,16 +129,25 @@ namespace exunit {
 #if defined(WIN32)
 			QueryPerformanceFrequency(&sFrequency);
 #endif
+#if defined(__linux__)
+			clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &mStartTime);
+#endif
 		}
 
 #if defined(WIN32)
 		static LARGE_INTEGER sFrequency;
 		LARGE_INTEGER        mStartingTime;
 #endif
+#if defined(__linux__)
+		static struct timespec mStartTime;
+#endif
 	};
 
 #if defined(WIN32)
 	LARGE_INTEGER Timer::sFrequency;
+#endif
+#if defined(__linux__)
+	struct timespec Timer::mStartTime;
 #endif
 
 } // namespace exunit
@@ -177,14 +189,16 @@ int main(int /*argc*/, char ** /*arvc*/) {
 		exunit::modeltoply("cube_subtract_cylinder.ply", model);
 	}
 
+#define SCALE_TEST 1    	// 4 will lead to more complex objects, but not too high runtimes in my case
+
 	{
 		exunit::Timer t;
 
 		auto a = csgmodel_cube({ 0.0f, 0.0f, 0.0f }, { 1.0f, 1.0f, 1.0f }, white);
-		auto b = csgmodel_sphere({ 0, 0, 0 }, 1.35f, white, 16);
-		auto c = csgmodel_cylinder({ -1, 0, 0 }, { 1, 0, 0 }, 0.7f, red);
-		auto d = csgmodel_cylinder({ 0, -1, 0 }, { 0, 1, 0 }, 0.7f, green);
-		auto e = csgmodel_cylinder({ 0, 0, -1 }, { 0, 0, 1 }, 0.7f, blue);
+		auto b = csgmodel_sphere({ 0, 0, 0 }, 1.35f, white, 16*SCALE_TEST, 16*SCALE_TEST);
+		auto c = csgmodel_cylinder({ -1, 0, 0 }, { 1, 0, 0 }, 0.7f, red, 16*SCALE_TEST);
+		auto d = csgmodel_cylinder({ 0, -1, 0 }, { 0, 1, 0 }, 0.7f, green, 16*SCALE_TEST);
+		auto e = csgmodel_cylinder({ 0, 0, -1 }, { 0, 0, 1 }, 0.7f, blue, 16*SCALE_TEST);
 
 		// a.intersect(b).subtract(c.union(d).union(e))
 		auto model = csgsubtract(csgintersection(a, b), csgunion(csgunion(c, d), e));
@@ -196,10 +210,10 @@ int main(int /*argc*/, char ** /*arvc*/) {
 		exunit::Timer t;
 
 		auto a = csgpolygon_cube({ 0.0f, 0.0f, 0.0f }, { 1.0f, 1.0f, 1.0f }, white);
-		auto b = csgpolygon_sphere({ 0, 0, 0 }, 1.35f, white, 16);
-		auto c = csgpolygon_cylinder({ -1, 0, 0 }, { 1, 0, 0 }, 0.7f, red);
-		auto d = csgpolygon_cylinder({ 0, -1, 0 }, { 0, 1, 0 }, 0.7f, green);
-		auto e = csgpolygon_cylinder({ 0, 0, -1 }, { 0, 0, 1 }, 0.7f, blue);
+		auto b = csgpolygon_sphere({ 0, 0, 0 }, 1.35f, white, 16*SCALE_TEST, 16*SCALE_TEST);
+		auto c = csgpolygon_cylinder({ -1, 0, 0 }, { 1, 0, 0 }, 0.7f, red, 16*SCALE_TEST);
+		auto d = csgpolygon_cylinder({ 0, -1, 0 }, { 0, 1, 0 }, 0.7f, green, 16*SCALE_TEST);
+		auto e = csgpolygon_cylinder({ 0, 0, -1 }, { 0, 0, 1 }, 0.7f, blue, 16*SCALE_TEST);
 
 		// a.intersect(b).subtract(c.union(d).union(e))
 		auto polygons = csgsubtract(csgintersection(a, b), csgunion(csgunion(c, d), e));
@@ -212,10 +226,10 @@ int main(int /*argc*/, char ** /*arvc*/) {
 		exunit::Timer t;
 
 		auto a = csgpolygon_cube({ 0.0f, 0.0f, 0.0f }, { 1.0f, 1.0f, 1.0f }, white);
-		auto b = csgpolygon_sphere({ 0, 0, 0 }, 1.35f, white, 16);
-		auto c = csgpolygon_cylinder({ -1, 0, 0 }, { 1, 0, 0 }, 0.7f, red);
-		auto d = csgpolygon_cylinder({ 0, -1, 0 }, { 0, 1, 0 }, 0.7f, green);
-		auto e = csgpolygon_cylinder({ 0, 0, -1 }, { 0, 0, 1 }, 0.7f, blue);
+		auto b = csgpolygon_sphere({ 0, 0, 0 }, 1.35f, white, 16*4, 16*SCALE_TEST);
+		auto c = csgpolygon_cylinder({ -1, 0, 0 }, { 1, 0, 0 }, 0.7f, red, 16*SCALE_TEST);
+		auto d = csgpolygon_cylinder({ 0, -1, 0 }, { 0, 1, 0 }, 0.7f, green, 16*SCALE_TEST);
+		auto e = csgpolygon_cylinder({ 0, 0, -1 }, { 0, 0, 1 }, 0.7f, blue, 16*SCALE_TEST);
 
 		// a.intersect(b).subtract(c.union(d).union(e))
 		auto polygons = csgsubtract(csgintersection(a, b), csgunion(csgunion(c, d), e));
@@ -248,7 +262,6 @@ int main(int /*argc*/, char ** /*arvc*/) {
 
 		auto gourd = modelfrompolygons(polygons);
 		auto cyl = csgmodel_cylinder({ 0.6f, 0.8f, -0.6f }, { -0.6f, -0.8f, 0.6f }, 0.4f, blue);
-
 		{
 			exunit::Timer t;
 			exunit::modeltoply("gourd_union.ply", csgunion(gourd, cyl));
@@ -259,7 +272,6 @@ int main(int /*argc*/, char ** /*arvc*/) {
 			exunit::modeltoply("gourd_intersect.ply", csgintersection(gourd, cyl));
 			std::cout << "gourd intersect cyl " << t.GetElapsedMS() << "ms" << '\n';
 		}
-
 		{
 			exunit::Timer t;
 			exunit::modeltoply("gourd_subtract.ply", csgsubtract(gourd, cyl));
@@ -271,6 +283,7 @@ int main(int /*argc*/, char ** /*arvc*/) {
 			std::cout << "cyl subtract gourd " << t.GetElapsedMS() << "ms" << '\n';
 		}
 	}
+
 #if defined(CSGJS_TEST_MESHOPTIMIZER)
 
     {
