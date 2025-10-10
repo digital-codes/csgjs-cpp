@@ -468,11 +468,11 @@ inline CSGNode *csg_intersect(const CSGNode *a1, const CSGNode *b1) {
 
 // Convert solid space to empty space and empty space to solid space.
 void CSGNode::invert() {
-    CSGJSCPP_DEQUE<CSGNode *> nodes;
+    CSGJSCPP_VECTOR<CSGNode *> nodes;
     nodes.push_back(this);
     while (nodes.size()) {
-        CSGNode *me = nodes.front();
-        nodes.pop_front();
+        CSGNode *me = nodes.back();
+        nodes.pop_back();
 
         for (size_t i = 0; i < me->polygons.size(); i++)
             me->polygons[i].flip();
@@ -490,16 +490,16 @@ void CSGNode::invert() {
 CSGJSCPP_VECTOR<Polygon> CSGNode::clippolygons(const CSGJSCPP_VECTOR<Polygon> &ilist) const {
     CSGJSCPP_VECTOR<Polygon> result;
 
-    CSGJSCPP_DEQUE<CSGJSCPP_PAIR<const CSGNode *const, CSGJSCPP_VECTOR<Polygon>>> clips;
+    CSGJSCPP_VECTOR<CSGJSCPP_PAIR<const CSGNode *const, CSGJSCPP_VECTOR<Polygon>>> clips;
     clips.push_back(CSGJSCPP_MAKEPAIR(this, ilist));
     while (clips.size()) {
-        const CSGNode *                 me = clips.front().first;
-        const CSGJSCPP_VECTOR<Polygon> &list = clips.front().second;
+        const CSGNode *                 me = clips.back().first;
+        const CSGJSCPP_VECTOR<Polygon> list = std::move(clips.back().second);
+        clips.pop_back();
 
         if (!me->plane.ok()) {
             result.reserve(result.size() + list.size());
             result.insert(result.end(), list.begin(), list.end());
-            clips.pop_front();
             continue;
         }
 
@@ -516,8 +516,6 @@ CSGJSCPP_VECTOR<Polygon> CSGNode::clippolygons(const CSGJSCPP_VECTOR<Polygon> &i
 
         if (me->back)
             clips.push_back(CSGJSCPP_MAKEPAIR(me->back, std::move(list_back)));
-
-        clips.pop_front();      //do it now because above the list is a reference and not a copy!
     }
 
     return result;
@@ -526,11 +524,11 @@ CSGJSCPP_VECTOR<Polygon> CSGNode::clippolygons(const CSGJSCPP_VECTOR<Polygon> &i
 // Remove all polygons in this BSP tree that are inside the other BSP tree
 // `bsp`.
 void CSGNode::clipto(const CSGNode *other) {
-    CSGJSCPP_DEQUE<CSGNode *> nodes;
+    CSGJSCPP_VECTOR<CSGNode *> nodes;
     nodes.push_back(this);
     while (nodes.size()) {
-        CSGNode *me = nodes.front();
-        nodes.pop_front();
+        CSGNode *me = nodes.back();
+        nodes.pop_back();
 
         me->polygons = other->clippolygons(me->polygons);
         if (me->front)
@@ -544,12 +542,13 @@ void CSGNode::clipto(const CSGNode *other) {
 CSGJSCPP_VECTOR<Polygon> CSGNode::allpolygons() const {
     CSGJSCPP_VECTOR<Polygon> result;
 
-    CSGJSCPP_DEQUE<const CSGNode *> nodes;
+    CSGJSCPP_VECTOR<const CSGNode *> nodes;
     nodes.push_back(this);
     while (nodes.size()) {
-        const CSGNode *me = nodes.front();
-        nodes.pop_front();
+        const CSGNode *me = nodes.back();
+        nodes.pop_back();
 
+        result.reserve(result.size() + me->polygons.size());
         result.insert(result.end(), me->polygons.begin(), me->polygons.end());
         if (me->front)
             nodes.push_back(me->front);
@@ -563,12 +562,12 @@ CSGJSCPP_VECTOR<Polygon> CSGNode::allpolygons() const {
 CSGNode *CSGNode::clone() const {
     CSGNode *ret = new CSGNode();
 
-    CSGJSCPP_DEQUE<CSGJSCPP_PAIR<const CSGNode *, CSGNode *>> nodes;
+    CSGJSCPP_VECTOR<CSGJSCPP_PAIR<const CSGNode *, CSGNode *>> nodes;
     nodes.push_back(CSGJSCPP_MAKEPAIR(this, ret));
     while (nodes.size()) {
-        const CSGNode *original = nodes.front().first;
-        CSGNode *      clone = nodes.front().second;
-        nodes.pop_front();
+        const CSGNode *original = nodes.back().first;
+        CSGNode *      clone = nodes.back().second;
+        nodes.pop_back();
 
         clone->polygons = original->polygons;
         clone->plane = original->plane;
@@ -593,12 +592,13 @@ void CSGNode::build(const CSGJSCPP_VECTOR<Polygon> &ilist) {
     if (!ilist.size())
         return;
 
-    CSGJSCPP_DEQUE<CSGJSCPP_PAIR<CSGNode *, CSGJSCPP_VECTOR<Polygon>>> builds;
+    CSGJSCPP_VECTOR<CSGJSCPP_PAIR<CSGNode *, CSGJSCPP_VECTOR<Polygon>>> builds;
     builds.push_back(CSGJSCPP_MAKEPAIR(this, ilist));
 
     while (builds.size()) {
-        CSGNode *                       me = builds.front().first;
-        const CSGJSCPP_VECTOR<Polygon> &list = builds.front().second;
+        CSGNode *                       me = builds.back().first;
+        const CSGJSCPP_VECTOR<Polygon> list = std::move(builds.back().second);
+        builds.pop_back();
 
         assert(list.size() > 0 && "logic error");
 
@@ -620,7 +620,6 @@ void CSGNode::build(const CSGJSCPP_VECTOR<Polygon> &ilist) {
                 me->back = new CSGNode;
             builds.push_back(CSGJSCPP_MAKEPAIR(me->back, std::move(list_back)));
         }
-        builds.pop_front();         //do it now because above the list is a reference and not a copy!
     }
 }
 
@@ -633,13 +632,13 @@ CSGNode::CSGNode(const CSGJSCPP_VECTOR<Polygon> &list) : front(nullptr), back(nu
 
 CSGNode::~CSGNode() {
 
-    CSGJSCPP_DEQUE<CSGNode *> nodes_to_delete;
-    CSGJSCPP_DEQUE<CSGNode *> nodes_to_disassemble;
+    CSGJSCPP_VECTOR<CSGNode *> nodes_to_delete;
+    CSGJSCPP_VECTOR<CSGNode *> nodes_to_disassemble;
 
     nodes_to_disassemble.push_back(this);
     while (nodes_to_disassemble.size()) {
-        CSGNode *me = nodes_to_disassemble.front();
-        nodes_to_disassemble.pop_front();
+        CSGNode *me = nodes_to_disassemble.back();
+        nodes_to_disassemble.pop_back();
 
         if (me->front) {
             nodes_to_disassemble.push_back(me->front);
@@ -1022,7 +1021,7 @@ not be used for further CSG operations!
 	CSGJSCPP_MAP<Tag, CSGJSCPP_VECTOR<SideTag> >vertextag2sidestart;
 	//all sides that have vertex tag as it's end.
 	CSGJSCPP_MAP<Tag, CSGJSCPP_VECTOR<SideTag> >vertextag2sideend;
-	CSGJSCPP_DEQUE<SideTag> sidestocheck;;
+	CSGJSCPP_DEQUE<SideTag> sidestocheck;
 	bool sidemapisempty = true;
 	for (const auto &iter : sidemap) {
 		const SideTag &sidetag = iter.first;
