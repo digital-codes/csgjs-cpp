@@ -62,6 +62,11 @@
 #define CSGJSCPP_MAP std::map
 #endif
 
+#if !defined(CSGJSCPP_UNORDEREDMAP)
+#include <unordered_map>
+#define CSGJSCPP_UNORDEREDMAP std::unordered_map
+#endif
+
 #if !defined(CSGJSCPP_FIND_IF)
 #define CSGJSCPP_FIND_IF std::find_if
 #endif
@@ -671,20 +676,154 @@ inline CSGJSCPP_VECTOR<Polygon> modeltopolygons(const Model &model) {
     return list;
 }
 
+namespace {
+
+/* Spatial hash used by modelfrompolygons to find an existing equal vertex in
+   constant time instead of scanning every vertex already added.
+
+   A vertex is registered in every cell covering [pos - margin, pos + margin]
+   (at most 8). Two positions that compare equal differ by less than epsilon on
+   each axis, so any equal vertex is guaranteed to be registered in the cell a
+   lookup hashes to: one cell lookup is enough and no candidate can be missed.
+   Candidates are then compared with the normal Vertex operator==, so which
+   vertices are merged is exactly what the previous linear scan produced. */
+struct VertexCell {
+    int32_t x, y, z;
+
+    bool operator==(const VertexCell &other) const {
+        return x == other.x && y == other.y && z == other.z;
+    }
+};
+
+struct VertexCellHash {
+    size_t operator()(const VertexCell &c) const {
+        return ((size_t)(uint32_t)c.x * 73856093u) ^ ((size_t)(uint32_t)c.y * 19349663u) ^
+               ((size_t)(uint32_t)c.z * 83492791u);
+    }
+};
+
+/* Cell size is 4 * csgjs_EPSILON and vertices are registered over a window of
+   +/- vertexcellmargin, which is slightly wider than epsilon. The margin absorbs
+   the rounding of the window bounds, and a window of 2 * 1.01 * epsilon is always
+   narrower than one cell, so a vertex never needs more than 2 cells per axis. */
+inline double vertexcellmargin() {
+    return 1.01 * (double)csgjs_EPSILON;
+}
+
+inline int32_t vertexcellcoord(double v) {
+    return (int32_t)std::floor(v / (4.0 * (double)csgjs_EPSILON));
+}
+
+} // namespace
+
 Model modelfrompolygons(const CSGJSCPP_VECTOR<Polygon> &polygons) {
     Model model;
+
+    size_t nvertices = 0;
+    for (size_t i = 0; i < polygons.size(); i++) {
+        nvertices += polygons[i].vertices.size();
+    }
+    model.vertices.reserve(nvertices);
+    model.indices.reserve(nvertices * 3);
+
+    /* Below this many vertices the linear scan is faster than hashing, so only
+       switch to the spatial hash once the quadratic cost starts to show. */
+    const size_t gridthreshold = 256;
+
+    CSGJSCPP_UNORDEREDMAP<VertexCell, CSGJSCPP_VECTOR<Model::Index>, VertexCellHash> grid;
+
+    bool usegrid = false;
+
+    /* register a vertex in every cell a lookup could come from */
+    auto registervertex = [&grid, &model](Model::Index index) {
+        const Vector &p = model.vertices[index].pos;
+
+        const double margin = vertexcellmargin();
+
+        const int32_t xs[2] = {vertexcellcoord((double)p.x - margin), vertexcellcoord((double)p.x + margin)};
+        const int32_t ys[2] = {vertexcellcoord((double)p.y - margin), vertexcellcoord((double)p.y + margin)};
+        const int32_t zs[2] = {vertexcellcoord((double)p.z - margin), vertexcellcoord((double)p.z + margin)};
+
+        const int nx = (xs[0] == xs[1]) ? 1 : 2;
+        const int ny = (ys[0] == ys[1]) ? 1 : 2;
+        const int nz = (zs[0] == zs[1]) ? 1 : 2;
+
+        for (int i = 0; i < nx; i++) {
+            for (int j = 0; j < ny; j++) {
+                for (int k = 0; k < nz; k++) {
+                    const VertexCell cell = {xs[i], ys[j], zs[k]};
+                    grid[cell].push_back(index);
+                }
+            }
+        }
+    };
+
+    auto addvertex = [&](const Vertex &newv) -> Model::Index {
+        if (!usegrid) {
+            for (Model::Index i = 0; i < (Model::Index)model.vertices.size(); i++) {
+                if (model.vertices[i] == newv) {
+                    return i;
+                }
+            }
+
+            const Model::Index index = (Model::Index)model.vertices.size();
+            model.vertices.push_back(newv);
+
+            if (model.vertices.size() > gridthreshold) {
+                grid.reserve(nvertices);
+                for (Model::Index i = 0; i < (Model::Index)model.vertices.size(); i++) {
+                    registervertex(i);
+                }
+                usegrid = true;
+            }
+            return index;
+        }
+
+        const VertexCell cell = {vertexcellcoord((double)newv.pos.x), vertexcellcoord((double)newv.pos.y),
+                                 vertexcellcoord((double)newv.pos.z)};
+
+        auto found = grid.find(cell);
+        if (found != grid.end()) {
+            const CSGJSCPP_VECTOR<Model::Index> &bucket = found->second;
+
+            bool         hasmatch = false;
+            Model::Index match = 0;
+
+            for (size_t i = 0; i < bucket.size(); i++) {
+                const Model::Index candidate = bucket[i];
+
+                if (model.vertices[candidate] == newv) {
+                    /* the linear scan returns the first match in insertion order,
+                       keep the lowest index so the output is unchanged */
+                    if (!hasmatch || candidate < match) {
+                        match = candidate;
+                        hasmatch = true;
+                    }
+                }
+            }
+
+            if (hasmatch) {
+                return match;
+            }
+        }
+
+        const Model::Index index = (Model::Index)model.vertices.size();
+        model.vertices.push_back(newv);
+        registervertex(index);
+        return index;
+    };
 
     for (size_t i = 0; i < polygons.size(); i++) {
         const Polygon &poly = polygons[i];
 
         if (poly.vertices.size()) {
 
-            Model::Index a = model.AddVertex(poly.vertices[0]);
+            Model::Index a = addvertex(poly.vertices[0]);
 
             for (size_t j = 2; j < poly.vertices.size(); j++) {
 
-                Model::Index b = model.AddVertex(poly.vertices[j - 1]);
-                Model::Index c = model.AddVertex(poly.vertices[j]);
+                Model::Index b = addvertex(poly.vertices[j - 1]);
+                Model::Index c = addvertex(poly.vertices[j]);
 
                 if (a != b && b != c && c != a) {
                     model.indices.push_back(a);

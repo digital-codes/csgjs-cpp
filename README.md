@@ -66,6 +66,7 @@ List of changes from the initial port:
 * applied clang formatting (see .clang-format).
 * Added some basic optimizations speeding it up by ~40% (non scientific measurements of course).
 * Replace `std::vector` etc with macros which can be defined before inclusion. This means I can use eastl::vector in other projects (or any type that matches the API for std::vector). This is really ugly but it's the easiest way to override these classes without playing with `using namespace eastl` and it being "less than obvious which class is used.
+* `modelfrompolygons` uses a spatial hash to find matching vertices instead of scanning every vertex added so far. Same output, but building a model is no longer O(n^2) in the number of vertices.
 
 ## Perf notes
 
