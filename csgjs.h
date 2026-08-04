@@ -175,7 +175,7 @@ struct Plane {
     Plane(const Vector &a, const Vector &b, const Vector &c);
 
     inline bool ok() const {
-        return length(this->normal) > 0.0f;
+        return lengthsquared(this->normal) > 0.0f;
     }
 
     inline void flip() {
@@ -184,6 +184,9 @@ struct Plane {
     }
 
     void splitpolygon(const Polygon &poly, CSGJSCPP_VECTOR<Polygon> &coplanarFront,
+                      CSGJSCPP_VECTOR<Polygon> &coplanarBack, CSGJSCPP_VECTOR<Polygon> &front,
+                      CSGJSCPP_VECTOR<Polygon> &back) const;
+    void splitpolygon(Polygon &&poly, CSGJSCPP_VECTOR<Polygon> &coplanarFront,
                       CSGJSCPP_VECTOR<Polygon> &coplanarBack, CSGJSCPP_VECTOR<Polygon> &front,
                       CSGJSCPP_VECTOR<Polygon> &back) const;
 
@@ -209,6 +212,7 @@ struct Polygon {
 
     Polygon();
     Polygon(const CSGJSCPP_VECTOR<Vertex> &list);
+    Polygon(CSGJSCPP_VECTOR<Vertex> &&list);
 
     inline void flip() {
         CSGJSCPP_REVERSE(vertices.begin(), vertices.end());
@@ -300,14 +304,19 @@ struct CSGNode {
 
     CSGNode();
     CSGNode(const CSGJSCPP_VECTOR<Polygon> &list);
+    CSGNode(CSGJSCPP_VECTOR<Polygon> &&list);
     ~CSGNode();
 
     CSGNode *                clone() const;
     void                     clipto(const CSGNode *other);
     void                     invert();
     void                     build(const CSGJSCPP_VECTOR<Polygon> &Polygon);
+    void                     build(CSGJSCPP_VECTOR<Polygon> &&Polygon);
     CSGJSCPP_VECTOR<Polygon> clippolygons(const CSGJSCPP_VECTOR<Polygon> &list) const;
     CSGJSCPP_VECTOR<Polygon> allpolygons() const;
+    /* same as allpolygons() but moves the polygons out, leaving the tree empty.
+       for callers that discard the node right after. */
+    CSGJSCPP_VECTOR<Polygon> takepolygons();
 };
 
 // Vertex implementation
@@ -348,43 +357,50 @@ Plane::Plane(const Vector &a, const Vector &b, const Vector &c) {
 void Plane::splitpolygon(const Polygon &poly, CSGJSCPP_VECTOR<Polygon> &coplanarFront,
                          CSGJSCPP_VECTOR<Polygon> &coplanarBack, CSGJSCPP_VECTOR<Polygon> &front,
                          CSGJSCPP_VECTOR<Polygon> &back) const {
+    splitpolygon(Polygon(poly), coplanarFront, coplanarBack, front, back);
+}
+
+void Plane::splitpolygon(Polygon &&poly, CSGJSCPP_VECTOR<Polygon> &coplanarFront,
+                         CSGJSCPP_VECTOR<Polygon> &coplanarBack, CSGJSCPP_VECTOR<Polygon> &front,
+                         CSGJSCPP_VECTOR<Polygon> &back) const {
 
     // Classify each point as well as the entire polygon into one of the above
     // four classes.
+    const size_t nv = poly.vertices.size();
+
     int polygonType = 0;
-    for (const auto &v : poly.vertices) {
-        polygonType |= classify(v.pos);
-    }
+    for (size_t i = 0; i < nv; i++)
+        polygonType |= classify(poly.vertices[i].pos);
 
     // Put the polygon in the correct list, splitting it when necessary.
     switch (polygonType) {
     case COPLANAR: {
         if (dot(this->normal, poly.plane.normal) > 0)
-            coplanarFront.push_back(poly);
+            coplanarFront.push_back(std::move(poly));
         else
-            coplanarBack.push_back(poly);
+            coplanarBack.push_back(std::move(poly));
         break;
     }
     case FRONT: {
-        front.push_back(poly);
+        front.push_back(std::move(poly));
         break;
     }
     case BACK: {
-        back.push_back(poly);
+        back.push_back(std::move(poly));
         break;
     }
     case SPANNING: {
         CSGJSCPP_VECTOR<Vertex> f, b;
 
-        for (size_t i = 0; i < poly.vertices.size(); i++) {
+        for (size_t i = 0; i < nv; i++) {
 
-            size_t j = (i + 1) % poly.vertices.size();
+            size_t j = (i + 1 == nv) ? 0 : i + 1;
 
             const Vertex &vi = poly.vertices[i];
             const Vertex &vj = poly.vertices[j];
 
-            int ti = classify(vi.pos);
-            int tj = classify(vj.pos);
+            const int ti = classify(vi.pos);
+            const int tj = classify(vj.pos);
 
             if (ti != BACK)
                 f.push_back(vi);
@@ -415,60 +431,67 @@ Polygon::Polygon(const CSGJSCPP_VECTOR<Vertex> &list)
     : vertices(list), plane(vertices[0].pos, vertices[1].pos, vertices[2].pos) {
 }
 
+Polygon::Polygon(CSGJSCPP_VECTOR<Vertex> &&list)
+    : vertices(std::move(list)), plane(vertices[0].pos, vertices[1].pos, vertices[2].pos) {
+}
+
 // Node implementation
 
 // Return a new CSG solid representing space in either this solid or in the
 // solid `csg`. Neither this solid nor the solid `csg` are modified.
-inline CSGNode *csg_union(const CSGNode *a1, const CSGNode *b1) {
-    CSGNode *a = a1->clone();
-    CSGNode *b = b1->clone();
+inline CSGNode *csg_union_inplace(CSGNode *a, CSGNode *b) {
     a->clipto(b);
     b->clipto(a);
     b->invert();
     b->clipto(a);
     b->invert();
-    a->build(b->allpolygons());
-    CSGNode *ret = new CSGNode(a->allpolygons());
-    delete a;
-    delete b;
-    return ret;
+    a->build(b->takepolygons());
+    return new CSGNode(a->takepolygons());
+}
+
+inline CSGNode *csg_union(const CSGNode *a1, const CSGNode *b1) {
+    CSGJSCPP_UNIQUEPTR<CSGNode> a(a1->clone());
+    CSGJSCPP_UNIQUEPTR<CSGNode> b(b1->clone());
+    return csg_union_inplace(a.get(), b.get());
 }
 
 // Return a new CSG solid representing space in this solid but not in the
 // solid `csg`. Neither this solid nor the solid `csg` are modified.
-inline CSGNode *csg_subtract(const CSGNode *a1, const CSGNode *b1) {
-    CSGNode *a = a1->clone();
-    CSGNode *b = b1->clone();
+inline CSGNode *csg_subtract_inplace(CSGNode *a, CSGNode *b) {
     a->invert();
     a->clipto(b);
     b->clipto(a);
     b->invert();
     b->clipto(a);
     b->invert();
-    a->build(b->allpolygons());
+    a->build(b->takepolygons());
     a->invert();
-    CSGNode *ret = new CSGNode(a->allpolygons());
-    delete a;
-    delete b;
-    return ret;
+    return new CSGNode(a->takepolygons());
+}
+
+inline CSGNode *csg_subtract(const CSGNode *a1, const CSGNode *b1) {
+    CSGJSCPP_UNIQUEPTR<CSGNode> a(a1->clone());
+    CSGJSCPP_UNIQUEPTR<CSGNode> b(b1->clone());
+    return csg_subtract_inplace(a.get(), b.get());
 }
 
 // Return a new CSG solid representing space both this solid and in the
 // solid `csg`. Neither this solid nor the solid `csg` are modified.
-inline CSGNode *csg_intersect(const CSGNode *a1, const CSGNode *b1) {
-    CSGNode *a = a1->clone();
-    CSGNode *b = b1->clone();
+inline CSGNode *csg_intersect_inplace(CSGNode *a, CSGNode *b) {
     a->invert();
     b->clipto(a);
     b->invert();
     a->clipto(b);
     b->clipto(a);
-    a->build(b->allpolygons());
+    a->build(b->takepolygons());
     a->invert();
-    CSGNode *ret = new CSGNode(a->allpolygons());
-    delete a;
-    delete b;
-    return ret;
+    return new CSGNode(a->takepolygons());
+}
+
+inline CSGNode *csg_intersect(const CSGNode *a1, const CSGNode *b1) {
+    CSGJSCPP_UNIQUEPTR<CSGNode> a(a1->clone());
+    CSGJSCPP_UNIQUEPTR<CSGNode> b(b1->clone());
+    return csg_intersect_inplace(a.get(), b.get());
 }
 
 // Convert solid space to empty space and empty space to solid space.
@@ -499,24 +522,24 @@ CSGJSCPP_VECTOR<Polygon> CSGNode::clippolygons(const CSGJSCPP_VECTOR<Polygon> &i
     clips.push_back(CSGJSCPP_MAKEPAIR(this, ilist));
     while (clips.size()) {
         const CSGNode *                 me = clips.back().first;
-        const CSGJSCPP_VECTOR<Polygon> list = std::move(clips.back().second);
+        CSGJSCPP_VECTOR<Polygon> list = std::move(clips.back().second);
         clips.pop_back();
 
         if (!me->plane.ok()) {
-            result.reserve(result.size() + list.size());
-            result.insert(result.end(), list.begin(), list.end());
+            result.insert(result.end(), std::make_move_iterator(list.begin()),
+                          std::make_move_iterator(list.end()));
             continue;
         }
 
         CSGJSCPP_VECTOR<Polygon> list_front, list_back;
         for (size_t i = 0; i < list.size(); i++)
-            me->plane.splitpolygon(list[i], list_front, list_back, list_front, list_back);
+            me->plane.splitpolygon(std::move(list[i]), list_front, list_back, list_front, list_back);
 
         if (me->front)
             clips.push_back(CSGJSCPP_MAKEPAIR(me->front, std::move(list_front)));
         else {
-            result.reserve(result.size() + list_front.size());
-            result.insert(result.end(), list_front.begin(), list_front.end());
+            result.insert(result.end(), std::make_move_iterator(list_front.begin()),
+                          std::make_move_iterator(list_front.end()));
         }
 
         if (me->back)
@@ -553,8 +576,28 @@ CSGJSCPP_VECTOR<Polygon> CSGNode::allpolygons() const {
         const CSGNode *me = nodes.back();
         nodes.pop_back();
 
-        result.reserve(result.size() + me->polygons.size());
         result.insert(result.end(), me->polygons.begin(), me->polygons.end());
+        if (me->front)
+            nodes.push_back(me->front);
+        if (me->back)
+            nodes.push_back(me->back);
+    }
+
+    return result;
+}
+
+CSGJSCPP_VECTOR<Polygon> CSGNode::takepolygons() {
+    CSGJSCPP_VECTOR<Polygon> result;
+
+    CSGJSCPP_VECTOR<CSGNode *> nodes;
+    nodes.push_back(this);
+    while (nodes.size()) {
+        CSGNode *me = nodes.back();
+        nodes.pop_back();
+
+        result.insert(result.end(), std::make_move_iterator(me->polygons.begin()),
+                      std::make_move_iterator(me->polygons.end()));
+        me->polygons.clear();
         if (me->front)
             nodes.push_back(me->front);
         if (me->back)
@@ -594,15 +637,19 @@ CSGNode *CSGNode::clone() const {
 // nodes there. Each set of polygons is partitioned using the first polygon
 // (no heuristic is used to pick a good split).
 void CSGNode::build(const CSGJSCPP_VECTOR<Polygon> &ilist) {
+    build(CSGJSCPP_VECTOR<Polygon>(ilist));
+}
+
+void CSGNode::build(CSGJSCPP_VECTOR<Polygon> &&ilist) {
     if (!ilist.size())
         return;
 
     CSGJSCPP_VECTOR<CSGJSCPP_PAIR<CSGNode *, CSGJSCPP_VECTOR<Polygon>>> builds;
-    builds.push_back(CSGJSCPP_MAKEPAIR(this, ilist));
+    builds.push_back(CSGJSCPP_MAKEPAIR(this, std::move(ilist)));
 
     while (builds.size()) {
         CSGNode *                       me = builds.back().first;
-        const CSGJSCPP_VECTOR<Polygon> list = std::move(builds.back().second);
+        CSGJSCPP_VECTOR<Polygon> list = std::move(builds.back().second);
         builds.pop_back();
 
         assert(list.size() > 0 && "logic error");
@@ -613,7 +660,7 @@ void CSGNode::build(const CSGJSCPP_VECTOR<Polygon> &ilist) {
 
         // me->polygons.push_back(list[0]);
         for (size_t i = 0; i < list.size(); i++)
-            me->plane.splitpolygon(list[i], me->polygons, me->polygons, list_front, list_back);
+            me->plane.splitpolygon(std::move(list[i]), me->polygons, me->polygons, list_front, list_back);
 
         if (list_front.size()) {
             if (!me->front)
@@ -633,6 +680,10 @@ CSGNode::CSGNode() : front(nullptr), back(nullptr) {
 
 CSGNode::CSGNode(const CSGJSCPP_VECTOR<Polygon> &list) : front(nullptr), back(nullptr) {
     build(list);
+}
+
+CSGNode::CSGNode(CSGJSCPP_VECTOR<Polygon> &&list) : front(nullptr), back(nullptr) {
+    build(std::move(list));
 }
 
 CSGNode::~CSGNode() {
@@ -837,16 +888,31 @@ Model modelfrompolygons(const CSGJSCPP_VECTOR<Polygon> &polygons) {
 }
 
 typedef CSGNode *csg_function(const CSGNode *a1, const CSGNode *b1);
+typedef CSGNode *csg_inplace_function(CSGNode *a, CSGNode *b);
 
 CSGJSCPP_VECTOR<Polygon> csgjs_operation(const CSGJSCPP_VECTOR<Polygon> &apoly, const CSGJSCPP_VECTOR<Polygon> &bpoly,
-                                         csg_function fun) {
+                                         csg_inplace_function fun) {
 
+    /* A and B are ours, so the operation may consume them: no clone needed. */
     CSGNode A(apoly);
     CSGNode B(bpoly);
 
     /* create a unique pointer here so we can delete AB on exit */
     CSGJSCPP_UNIQUEPTR<CSGNode> AB(fun(&A, &B));
-    return AB->allpolygons();
+    return AB->takepolygons();
+}
+
+inline CSGJSCPP_VECTOR<Polygon> csgjs_operation(const Model &a, const Model &b, csg_inplace_function fun) {
+    return csgjs_operation(modeltopolygons(a), modeltopolygons(b), fun);
+}
+
+/* kept for source compatibility with code passing the const/clone flavour */
+inline CSGJSCPP_VECTOR<Polygon> csgjs_operation(const CSGJSCPP_VECTOR<Polygon> &apoly,
+                                                const CSGJSCPP_VECTOR<Polygon> &bpoly, csg_function fun) {
+    CSGNode A(apoly);
+    CSGNode B(bpoly);
+    CSGJSCPP_UNIQUEPTR<CSGNode> AB(fun(&A, &B));
+    return AB->takepolygons();
 }
 
 inline CSGJSCPP_VECTOR<Polygon> csgjs_operation(const Model &a, const Model &b, csg_function fun) {
@@ -955,27 +1021,27 @@ Model csgmodel_cylinder(const Vector &s, const Vector &e, CSGJSCPP_REAL r, uint3
 }
 
 Model csgunion(const Model &a, const Model &b) {
-    return modelfrompolygons(csgjs_operation(a, b, csg_union));
+    return modelfrompolygons(csgjs_operation(a, b, csg_union_inplace));
 }
 
 Model csgintersection(const Model &a, const Model &b) {
-    return modelfrompolygons(csgjs_operation(a, b, csg_intersect));
+    return modelfrompolygons(csgjs_operation(a, b, csg_intersect_inplace));
 }
 
 Model csgsubtract(const Model &a, const Model &b) {
-    return modelfrompolygons(csgjs_operation(a, b, csg_subtract));
+    return modelfrompolygons(csgjs_operation(a, b, csg_subtract_inplace));
 }
 
 CSGJSCPP_VECTOR<Polygon> csgunion(const CSGJSCPP_VECTOR<Polygon> &a, const CSGJSCPP_VECTOR<Polygon> &b) {
-    return csgjs_operation(a, b, csg_union);
+    return csgjs_operation(a, b, csg_union_inplace);
 }
 
 CSGJSCPP_VECTOR<Polygon> csgintersection(const CSGJSCPP_VECTOR<Polygon> &a, const CSGJSCPP_VECTOR<Polygon> &b) {
-    return csgjs_operation(a, b, csg_intersect);
+    return csgjs_operation(a, b, csg_intersect_inplace);
 }
 
 CSGJSCPP_VECTOR<Polygon> csgsubtract(const CSGJSCPP_VECTOR<Polygon> &a, const CSGJSCPP_VECTOR<Polygon> &b) {
-    return csgjs_operation(a, b, csg_subtract);
+    return csgjs_operation(a, b, csg_subtract_inplace);
 }
 
 
