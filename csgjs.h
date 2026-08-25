@@ -375,10 +375,11 @@ void Plane::splitpolygon(Polygon &&poly, CSGJSCPP_VECTOR<Polygon> &coplanarFront
     // Put the polygon in the correct list, splitting it when necessary.
     switch (polygonType) {
     case COPLANAR: {
-        if (dot(this->normal, poly.plane.normal) > 0)
+        if (dot(this->normal, poly.plane.normal) > 0) {
             coplanarFront.push_back(std::move(poly));
-        else
+        } else {
             coplanarBack.push_back(std::move(poly));
+        }
         break;
     }
     case FRONT: {
